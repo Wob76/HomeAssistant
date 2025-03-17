@@ -36,32 +36,55 @@ trigger:
   - platform: time
     at: !input check_time
 
+variables:
+  label: !input device_label
+  days_threshold: !input offline_days
+  seconds_threshold: "{{ (days_threshold * 24 * 60 * 60) | int }}"
+  
 action:
-  - variables:
-      label: !input device_label
-      days_threshold: !input offline_days
-      offline_seconds: "{{ (days_threshold * 24 * 60 * 60) | int }}"
-  - service: template.render
-    data:
-      template: >
-        {% set offline_devices = [] %}
-        {% for device_id in states.device_tracker | selectattr('attributes.labels', 'contains', label) | map(attribute='entity_id') %}
-          {% if states(device_id) == 'not_home' and (as_timestamp(now()) - as_timestamp(states[device_id].last_changed)) > offline_seconds %}
-            {% set offline_devices = offline_devices + [states[device_id].name] %}
+  - repeat:
+      for_each: >
+        {% set devices = namespace(list=[]) %}
+        {% for entity_id in states.device_tracker %}
+          {% if entity_id.attributes.labels is defined 
+             and label in entity_id.attributes.labels 
+             and entity_id.state == 'not_home' 
+             and (as_timestamp(now()) - as_timestamp(entity_id.last_changed)) > seconds_threshold %}
+            {% set devices.list = devices.list + [entity_id.name] %}
           {% endif %}
         {% endfor %}
-        {{ offline_devices }}
-    response_variable: offline_devices
-  - choose:
-      - conditions:
-          - condition: template
-            value_template: "{{ offline_devices | length > 0 }}"
-        sequence:
-          - service: !input notification_service
-            data:
-              title: "Devices Offline"
-              message: >
-                The following devices have been offline for more than {{ days_threshold }} days:
-                {{ offline_devices | join(', ') }}
-  - delay:
-      seconds: 1
+        {{ devices.list }}
+      then:
+        - service: persistent_notification.create
+          data:
+            title: "Offline Device"
+            message: "{{ repeat.item }} has been offline for more than {{ days_threshold }} days."
+  - if:
+      - condition: template
+        value_template: >
+          {% set count = namespace(offline=0) %}
+          {% for entity_id in states.device_tracker %}
+            {% if entity_id.attributes.labels is defined 
+               and label in entity_id.attributes.labels 
+               and entity_id.state == 'not_home' 
+               and (as_timestamp(now()) - as_timestamp(entity_id.last_changed)) > seconds_threshold %}
+              {% set count.offline = count.offline + 1 %}
+            {% endif %}
+          {% endfor %}
+          {{ count.offline > 0 }}
+    then:
+      - service: !input notification_service
+        data:
+          title: "Devices Offline"
+          message: >
+            {% set devices = namespace(list=[]) %}
+            {% for entity_id in states.device_tracker %}
+              {% if entity_id.attributes.labels is defined 
+                 and label in entity_id.attributes.labels 
+                 and entity_id.state == 'not_home' 
+                 and (as_timestamp(now()) - as_timestamp(entity_id.last_changed)) > seconds_threshold %}
+                {% set devices.list = devices.list + [entity_id.name] %}
+              {% endif %}
+            {% endfor %}
+            The following devices have been offline for more than {{ days_threshold }} days:
+            {{ devices.list | join(', ') }}
