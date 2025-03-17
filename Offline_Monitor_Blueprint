@@ -1,5 +1,5 @@
 blueprint:
-  name: Monitor Labeled Devices
+  name: Monitor Labelled Devices
   description: Monitor devices with a specific label and send a notification if they've been offline for more than a specified time.
   domain: automation
   input:
