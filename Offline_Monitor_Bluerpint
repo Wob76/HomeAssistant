@@ -1,0 +1,67 @@
+blueprint:
+  name: Monitor Labeled Devices
+  description: Monitor devices with a specific label and send a notification if they've been offline for more than a specified time.
+  domain: automation
+  input:
+    device_label:
+      name: Device Label
+      description: The label used to identify devices to monitor
+      default: Monitored
+      selector:
+        text:
+    offline_days:
+      name: Days Offline
+      description: Number of days a device must be offline before sending a notification
+      default: 2
+      selector:
+        number:
+          min: 0.5
+          max: 30
+          step: 0.5
+          unit_of_measurement: days
+    notification_service:
+      name: Notification Service
+      description: Service to use for sending notifications
+      default: notify.mobile_app
+      selector:
+        text:
+    check_time:
+      name: Check Time
+      description: Time of day to check device status
+      default: "08:00:00"
+      selector:
+        time:
+
+trigger:
+  - platform: time
+    at: !input check_time
+
+action:
+  - variables:
+      label: !input device_label
+      days_threshold: !input offline_days
+      offline_seconds: "{{ (days_threshold * 24 * 60 * 60) | int }}"
+  - service: template.render
+    data:
+      template: >
+        {% set offline_devices = [] %}
+        {% for device_id in states.device_tracker | selectattr('attributes.labels', 'contains', label) | map(attribute='entity_id') %}
+          {% if states(device_id) == 'not_home' and (as_timestamp(now()) - as_timestamp(states[device_id].last_changed)) > offline_seconds %}
+            {% set offline_devices = offline_devices + [states[device_id].name] %}
+          {% endif %}
+        {% endfor %}
+        {{ offline_devices }}
+    response_variable: offline_devices
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ offline_devices | length > 0 }}"
+        sequence:
+          - service: !input notification_service
+            data:
+              title: "Devices Offline"
+              message: >
+                The following devices have been offline for more than {{ days_threshold }} days:
+                {{ offline_devices | join(', ') }}
+  - delay:
+      seconds: 1
